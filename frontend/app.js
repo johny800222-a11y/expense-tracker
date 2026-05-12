@@ -1,6 +1,6 @@
-const API = (window.ENV_API_URL || 'http://localhost:3000');
+const API = (window.ENV_API_URL || 'https://expense-tracker-api-b0vx.onrender.com');
 
-const DEMO_MODE = true; // 改為 false 後連接真實後端
+const DEMO_MODE = false; // 改為 false 後連接真實後端
 
 const DEMO_DATA = (() => {
   const y = new Date().getFullYear();

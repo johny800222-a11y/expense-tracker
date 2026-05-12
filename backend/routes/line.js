@@ -10,19 +10,19 @@ const lineConfig = {
 
 const client = new Client(lineConfig);
 
-// LINE User ID → 花費人 對應表（從環境變數讀取）
+// LINE User ID → 花費人
 function getPerson(userId) {
-  const map = {
-    [process.env.LINE_USER_ID_群]: '群',
-    [process.env.LINE_USER_ID_萱]: '萱'
-  };
-  return map[userId] || null;
+  const idQun  = process.env.LINE_USER_ID_群;
+  const idXuan = process.env.LINE_USER_ID_萱;
+  if (idQun  && userId === idQun)  return '群';
+  if (idXuan && userId === idXuan) return '萱';
+  return null;
 }
 
 const CATEGORIES = ['餐飲', '交通', '購物', '日用品', '娛樂', '醫療', '其他'];
 
 const CATEGORY_KEYWORDS = {
-  餐飲: ['早餐', '午餐', '晚餐', '咖啡', '飲料', '餐廳', '便當', '麥當勞', '肯德基', '火鍋', '燒烤', '壽司', '麵', '飯', '小吃', '路易莎', '星巴克'],
+  餐飲: ['早餐', '午餐', '晚餐', '咖啡', '飲料', '餐廳', '便當', '麥當勞', '火鍋', '燒烤', '壽司', '麵', '飯', '小吃', '路易莎', '星巴克'],
   交通: ['捷運', '公車', 'uber', 'taxi', '計程車', '油費', '停車', '高鐵', '火車', '機票'],
   購物: ['蝦皮', 'momo', '網購', 'uniqlo', 'zara', '衣服', '鞋子'],
   日用品: ['全聯', '家樂福', '大潤發', '超市', '洗髮', '沐浴', '衛生紙', '清潔'],
@@ -38,34 +38,19 @@ function guessCategory(description) {
   return '其他';
 }
 
-/*
-  支援格式：
-  早餐85          → 自動辨識使用者
-  超市 日用品 320
-  計程車 交通 150 2026-05-10
-  幫助            → 顯示說明
-*/
 function parseMessage(text) {
   const t = text.trim();
   if (/^(幫助|help|說明|\?)$/i.test(t)) return { type: 'help' };
 
-  // 嘗試從文字中提取金額（數字部分）
   const amountMatch = t.match(/(\d+(?:\.\d+)?)/g);
   if (!amountMatch) return null;
 
   const amount = parseFloat(amountMatch[amountMatch.length - 1]);
-
-  // 日期
   const dateMatch = t.match(/(\d{4}-\d{2}-\d{2})/);
   const date = dateMatch ? dateMatch[1] : dayjs().format('YYYY-MM-DD');
 
-  // 去掉金額和日期，剩下描述+分類
-  let remaining = t
-    .replace(date, '')
-    .replace(amount.toString(), '')
-    .trim();
+  let remaining = t.replace(date, '').replace(amount.toString(), '').trim();
 
-  // 找分類
   let category = null;
   for (const cat of CATEGORIES) {
     if (remaining.includes(cat)) {
@@ -91,62 +76,82 @@ function helpText() {
 全聯 日用品 320
 計程車 交通 150 2026-05-10
 
-📂 分類：餐飲、交通、購物、日用品、娛樂、醫療、其他
-（不填分類會自動猜測）`;
+📂 分類：餐飲、交通、購物、日用品、娛樂、醫療、其他`;
+}
+
+async function reply(replyToken, text) {
+  try {
+    await client.replyMessage(replyToken, { type: 'text', text });
+    console.log('[LINE] reply sent:', text.substring(0, 30));
+  } catch (e) {
+    console.error('[LINE] replyMessage error:', e.message);
+  }
 }
 
 router.post('/', async (req, res) => {
+  console.log('[LINE] webhook received');
   const signature = req.headers['x-line-signature'];
+
   if (!validateSignature(req.body, lineConfig.channelSecret, signature)) {
+    console.error('[LINE] invalid signature');
     return res.status(401).send('Invalid signature');
   }
 
-  const body = JSON.parse(req.body.toString());
+  let body;
+  try {
+    body = JSON.parse(req.body.toString());
+  } catch (e) {
+    console.error('[LINE] JSON parse error:', e.message);
+    return res.status(400).send('Bad request');
+  }
+
   res.sendStatus(200);
+  console.log('[LINE] events count:', body.events?.length);
 
   for (const event of body.events || []) {
+    console.log('[LINE] event type:', event.type, 'userId:', event.source?.userId);
+
     if (event.type !== 'message' || event.message.type !== 'text') continue;
 
-    const replyToken = event.replyToken;
+    const { replyToken } = event;
     const text = event.message.text;
     const userId = event.source?.userId;
+
+    console.log('[LINE] message:', text, 'userId:', userId);
+
     const parsed = parseMessage(text);
+    console.log('[LINE] parsed:', JSON.stringify(parsed));
 
     if (!parsed) {
-      await client.replyMessage(replyToken, {
-        type: 'text', text: '格式錯誤 😅\n請輸入「幫助」查看使用說明'
-      });
+      await reply(replyToken, '格式錯誤 😅\n請輸入「幫助」查看使用說明');
       continue;
     }
 
     if (parsed.type === 'help') {
-      await client.replyMessage(replyToken, { type: 'text', text: helpText() });
+      await reply(replyToken, helpText());
       continue;
     }
 
-    // 辨識使用者
     const person = getPerson(userId);
+    console.log('[LINE] person:', person, 'LINE_USER_ID_群:', process.env.LINE_USER_ID_群);
+
     if (!person) {
-      // 尚未設定此 User ID，回傳 ID 讓管理員設定
-      await client.replyMessage(replyToken, {
-        type: 'text',
-        text: `⚠️ 尚未綁定此帳號\n你的 LINE User ID：\n${userId}\n請聯絡管理員加入`
-      });
+      await reply(replyToken, `⚠️ 尚未綁定此帳號\n你的 LINE User ID：\n${userId}`);
       continue;
     }
 
     const { category, description, amount, date } = parsed;
+    console.log('[LINE] inserting:', { date, person, category, description, amount });
+
     const { error } = await supabase.from('expenses').insert([{
       date, person, category, description, amount, source: 'line'
     }]);
 
     if (error) {
-      await client.replyMessage(replyToken, { type: 'text', text: `❌ 儲存失敗：${error.message}` });
+      console.error('[LINE] supabase error:', error.message);
+      await reply(replyToken, `❌ 儲存失敗：${error.message}`);
     } else {
-      await client.replyMessage(replyToken, {
-        type: 'text',
-        text: `✅ 已記錄！\n👤 ${person}　📂 ${category}\n📝 ${description}\n💰 $${amount}\n📅 ${date}`
-      });
+      await reply(replyToken, `✅ 已記錄！\n👤 ${person}　📂 ${category}\n📝 ${description}\n💰 $${amount}\n📅 ${date}`);
     }
   }
 });

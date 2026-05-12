@@ -12,10 +12,8 @@ const client = new Client(lineConfig);
 
 // LINE User ID → 花費人
 function getPerson(userId) {
-  const idQun  = process.env.LINE_USER_ID_群;
-  const idXuan = process.env.LINE_USER_ID_萱;
-  if (idQun  && userId === idQun)  return '群';
-  if (idXuan && userId === idXuan) return '萱';
+  if (process.env.LINE_USER_ID_QUN  && userId === process.env.LINE_USER_ID_QUN)  return '群';
+  if (process.env.LINE_USER_ID_XUAN && userId === process.env.LINE_USER_ID_XUAN) return '萱';
   return null;
 }
 

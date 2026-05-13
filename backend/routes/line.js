@@ -44,8 +44,8 @@ function parseMessage(text) {
 
   if (/^(幫助|help|說明|\?)$/i.test(t)) return { type: 'help' };
 
-  // 支援 24000 或 24,000 格式
-  const amountMatch = t.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)/g);
+  // 支援 24000 或 24,000 格式（+ 而非 * 避免拆分普通數字）
+  const amountMatch = t.match(/(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)/g);
   if (!amountMatch) return null;
 
   const rawAmount = amountMatch[amountMatch.length - 1];

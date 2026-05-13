@@ -40,14 +40,16 @@ function parseMessage(text) {
   const t = text.trim();
   if (/^(幫助|help|說明|\?)$/i.test(t)) return { type: 'help' };
 
-  const amountMatch = t.match(/(\d+(?:\.\d+)?)/g);
+  // 支援 24000 或 24,000 格式
+  const amountMatch = t.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)/g);
   if (!amountMatch) return null;
 
-  const amount = parseFloat(amountMatch[amountMatch.length - 1]);
+  const rawAmount = amountMatch[amountMatch.length - 1];
+  const amount = parseFloat(rawAmount.replace(/,/g, ''));
   const dateMatch = t.match(/(\d{4}-\d{2}-\d{2})/);
   const date = dateMatch ? dateMatch[1] : dayjs().format('YYYY-MM-DD');
 
-  let remaining = t.replace(date, '').replace(amount.toString(), '').trim();
+  let remaining = t.replace(date, '').replace(rawAmount, '').trim();
 
   let category = null;
   for (const cat of CATEGORIES) {

@@ -37,7 +37,11 @@ function guessCategory(description) {
 }
 
 function parseMessage(text) {
-  const t = text.trim();
+  // 全形數字轉半形、全形逗號轉半形
+  const t = text.trim()
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
+    .replace(/，/g, ',');
+
   if (/^(幫助|help|說明|\?)$/i.test(t)) return { type: 'help' };
 
   // 支援 24000 或 24,000 格式
@@ -46,6 +50,7 @@ function parseMessage(text) {
 
   const rawAmount = amountMatch[amountMatch.length - 1];
   const amount = parseFloat(rawAmount.replace(/,/g, ''));
+  if (!amount || amount <= 0 || isNaN(amount)) return null;
   const dateMatch = t.match(/(\d{4}-\d{2}-\d{2})/);
   const date = dateMatch ? dateMatch[1] : dayjs().format('YYYY-MM-DD');
 

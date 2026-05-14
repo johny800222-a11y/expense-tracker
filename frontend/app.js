@@ -27,7 +27,8 @@ const DEMO_DATA = (() => {
 
 const CATEGORY_ICON = {
   餐飲: '🍜', 交通: '🚌', 購物: '🛍️',
-  日用品: '🧴', 娛樂: '🎬', 醫療: '💊', 其他: '📌'
+  日用品: '🧴', 娛樂: '🎬', 醫療: '💊',
+  店務: '🏪', 教育費: '📚', 貸款: '🏦', 其他: '📌'
 };
 
 const CATEGORY_COLORS = [
@@ -54,16 +55,45 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('modalOverlay').onclick    = e => { if (e.target === e.currentTarget) closeModal(); };
   document.getElementById('expenseForm').onsubmit    = handleSubmit;
 
-  document.getElementById('syncInvoiceBtn').onclick = () =>
-    document.getElementById('syncModalOverlay').classList.add('active');
-  document.getElementById('cancelSyncBtn').onclick  = () =>
-    document.getElementById('syncModalOverlay').classList.remove('active');
-  document.getElementById('doSyncBtn').onclick      = handleSync;
+  document.getElementById('syncInvoiceBtn').onclick = openSyncModal;
+  document.getElementById('cancelSyncBtn').onclick  = closeSyncModal;
+  document.getElementById('doSyncBtn').onclick      = importCSV;
   document.getElementById('syncModalOverlay').onclick = e => {
+    if (e.target === e.currentTarget) closeSyncModal();
+  };
+  document.getElementById('csvFileInput').onchange = e => handleCSVFile(e.target.files[0]);
+  document.getElementById('csvDropLabel').onclick  = () => document.getElementById('csvFileInput').click();
+  document.getElementById('csvResetBtn').onclick   = resetCSVUpload;
+
+  const dropZone = document.getElementById('csvDropZone');
+  dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('drag-over');
+    handleCSVFile(e.dataTransfer.files[0]);
+  });
+
+  document.getElementById('openCarrierBtn').onclick = openCarrierModal;
+  document.getElementById('cancelCarrierBtn').onclick = () =>
+    document.getElementById('carrierModalOverlay').classList.remove('active');
+  document.getElementById('carrierModalOverlay').onclick = e => {
     if (e.target === e.currentTarget)
-      document.getElementById('syncModalOverlay').classList.remove('active');
+      document.getElementById('carrierModalOverlay').classList.remove('active');
   };
 });
+
+function openCarrierModal() {
+  document.getElementById('carrierModalOverlay').classList.add('active');
+  JsBarcode('#carrierBarcode', '/I+OBSTR', {
+    format: 'CODE128',
+    width: 2.5,
+    height: 80,
+    displayValue: false,
+    background: '#ffffff',
+    lineColor: '#000000',
+    margin: 8
+  });
+}
 
 function setDateDefault() {
   const today = new Date().toISOString().split('T')[0];
@@ -319,26 +349,149 @@ async function deleteExpense(id) {
   } catch { showToast('❌ 刪除失敗'); }
 }
 
-/* ── Sync Invoice ── */
-async function handleSync() {
-  const person = document.getElementById('syncPerson').value;
-  const months = document.getElementById('syncMonths').value;
-  document.getElementById('doSyncBtn').textContent = '同步中...';
-  try {
-    const res = await fetch(`${API}/api/invoice/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ person, months: parseInt(months) })
-    });
-    const data = await res.json();
-    showToast(`☁️ 同步完成，匯入 ${data.synced} 筆發票`);
-    document.getElementById('syncModalOverlay').classList.remove('active');
-    loadExpenses();
-  } catch (e) {
-    showToast('❌ 同步失敗，請檢查 API 設定');
-  } finally {
-    document.getElementById('doSyncBtn').textContent = '開始同步';
+/* ── CSV Invoice Import ── */
+let csvParsedInvoices = [];
+
+const SELLER_CATEGORY = {
+  餐飲: ['超商','便利','統一','全家','萊爾富','ok超','麥當勞','肯德基','摩斯','漢堡','pizza','必勝客','咖啡','路易莎','星巴克','火鍋','餐廳','餐館','燒烤','壽司','早餐','豆漿','飲食','食品','烘焙','麵包','點心','小吃','便當'],
+  交通: ['中油','台灣中油','加油','cpc','油品','捷運','公車','台鐵','高鐵','uber','taxi','計程','停車','客運','航空'],
+  購物: ['蝦皮','momo','pchome','購物','百貨','商行','服飾','衣','鞋','箱包','運動','3c','電子'],
+  日用品: ['全聯','家樂福','大潤發','好市多','costco','藥局','藥妝','康是美','屈臣氏','寶雅','生活'],
+  娛樂: ['電影','ktv','遊樂','展覽','票券','演唱'],
+  醫療: ['醫院','診所','藥局','藥妝','醫療','健康'],
+};
+
+function guessSellerCategory(sellerName) {
+  const s = sellerName.toLowerCase();
+  for (const [cat, keys] of Object.entries(SELLER_CATEGORY)) {
+    if (keys.some(k => s.includes(k))) return cat;
   }
+  return '其他';
+}
+
+function shortSeller(name) {
+  return name.replace(/股份有限公司|有限公司|股份|分公司|第.+分公司|桃園.*分公司|台北.*分公司|新北.*分公司/g, '').trim().substring(0, 20);
+}
+
+function parseInvoiceCSV(text) {
+  const lines = text.split('\n').filter(l => l.trim() && !l.startsWith('捐贈') && !l.startsWith('注意'));
+  const headers = lines[0].split(',');
+  const rows = lines.slice(1).map(l => {
+    const cols = l.split(',');
+    return {
+      date:     cols[1]?.trim(),
+      invoiceNo: cols[2]?.trim(),
+      amount:   parseFloat(cols[3]) || 0,
+      status:   cols[4]?.trim(),
+      sellerName: cols[7]?.trim() || '',
+      itemAmount: parseFloat(cols[12]) || 0,
+    };
+  }).filter(r => r.date && r.invoiceNo && r.status === '開立已確認');
+
+  // 按發票號碼 group，加總正數金額
+  const invoiceMap = {};
+  for (const row of rows) {
+    if (!invoiceMap[row.invoiceNo]) {
+      invoiceMap[row.invoiceNo] = { date: row.date, sellerName: row.sellerName, total: 0 };
+    }
+    if (row.itemAmount > 0) invoiceMap[row.invoiceNo].total += row.itemAmount;
+  }
+
+  return Object.entries(invoiceMap)
+    .filter(([, v]) => v.total > 0)
+    .map(([invoiceNo, v]) => ({
+      invoiceNo,
+      date: `${v.date.substring(0,4)}-${v.date.substring(4,6)}-${v.date.substring(6,8)}`,
+      sellerName: v.sellerName,
+      description: shortSeller(v.sellerName),
+      category: guessSellerCategory(v.sellerName),
+      amount: v.total,
+      selected: true,
+    }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+function openSyncModal() {
+  resetCSVUpload();
+  document.getElementById('syncModalOverlay').classList.add('active');
+}
+
+function closeSyncModal() {
+  document.getElementById('syncModalOverlay').classList.remove('active');
+}
+
+function resetCSVUpload() {
+  csvParsedInvoices = [];
+  document.getElementById('csvUploadArea').style.display = '';
+  document.getElementById('csvPreviewArea').style.display = 'none';
+  document.getElementById('doSyncBtn').style.display = 'none';
+  document.getElementById('csvFileInput').value = '';
+}
+
+function handleCSVFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    csvParsedInvoices = parseInvoiceCSV(text);
+    renderCSVPreview();
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
+function renderCSVPreview() {
+  document.getElementById('csvUploadArea').style.display = 'none';
+  document.getElementById('csvPreviewArea').style.display = '';
+  document.getElementById('doSyncBtn').style.display = '';
+  document.getElementById('csvPreviewTitle').textContent = `共解析 ${csvParsedInvoices.length} 張發票`;
+
+  const body = document.getElementById('csvPreviewBody');
+  body.innerHTML = csvParsedInvoices.map((inv, i) => `
+    <tr id="csv-row-${i}" class="${inv.selected ? '' : 'skip-row'}">
+      <td>${inv.date.substring(5)}</td>
+      <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${inv.sellerName}">${inv.description}</td>
+      <td>
+        <select style="background:transparent;border:none;color:var(--muted);font-size:.78rem;cursor:pointer" onchange="csvParsedInvoices[${i}].category=this.value">
+          ${['餐飲','交通','購物','日用品','娛樂','醫療','其他'].map(c => `<option${c===inv.category?' selected':''}>${c}</option>`).join('')}
+        </select>
+      </td>
+      <td style="text-align:right;font-weight:600">$${inv.amount.toLocaleString()}</td>
+      <td style="text-align:center">
+        <input type="checkbox" ${inv.selected?'checked':''} onchange="csvParsedInvoices[${i}].selected=this.checked; document.getElementById('csv-row-${i}').className=this.checked?'':'skip-row'" />
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function importCSV() {
+  const person = document.getElementById('syncPerson').value;
+  const toImport = csvParsedInvoices.filter(inv => inv.selected);
+  if (!toImport.length) { showToast('⚠️ 沒有選取任何發票'); return; }
+
+  document.getElementById('doSyncBtn').textContent = '匯入中...';
+  document.getElementById('doSyncBtn').disabled = true;
+
+  let success = 0, fail = 0;
+  for (const inv of toImport) {
+    const persons = person === '共同' ? ['群', '萱'] : [person];
+    for (const p of persons) {
+      const amount = person === '共同' ? Math.round(inv.amount / 2) : inv.amount;
+      try {
+        const res = await fetch(`${API}/api/expenses`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ person: p, date: inv.date, category: inv.category, description: inv.description, amount, source: 'invoice', invoice_no: inv.invoiceNo })
+        });
+        if (res.ok) success++; else fail++;
+      } catch { fail++; }
+    }
+  }
+
+  document.getElementById('doSyncBtn').textContent = '匯入選取發票';
+  document.getElementById('doSyncBtn').disabled = false;
+  showToast(`✅ 成功匯入 ${success} 筆${fail ? `，${fail} 筆失敗` : ''}`);
+  closeSyncModal();
+  loadExpenses();
 }
 
 /* ── Toast ── */
